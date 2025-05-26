@@ -1,12 +1,16 @@
 ////////////
 "use client";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import Draggable from "react-draggable";
 import {
   ReactFlow,
   Background,
   Controls,
   applyNodeChanges,
+  useNodesState,
+  useEdgesState,
+  ReactFlowInstance,
+  useReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import Footer from "./components/Footer";
@@ -15,52 +19,61 @@ import CustomControls from "./components/CustomControls";
 import Sidebar from "./components/Sidebar";
 
 export default function Home() {
-  // Initial nodes and edges
-  const initialNodes = [
-    {
-      id: "start",
-      type: "input",
-      data: { label: "START" },
-      position: { x: 50, y: 100 },
-    },
-    {
-      id: "language-combination",
-      data: {
-        label: (
-          <div className="p-2">
-            <h3 className="font-bold">Language Combination</h3>
-            <select
-              className="mt-2 p-1 border border-gray-300 rounded"
-              onChange={(e) => handleLanguageChange(e.target.value)}
-            >
-              <option value="">Select</option>
-              <option value="pt-en">Portuguese-English</option>
-              <option value="es-en">Spanish-English</option>
-            </select>
-          </div>
-        ),
-      },
-      position: { x: 250, y: 100 },
-    },
-  ];
-
-  const initialEdges = [
-    {
-      id: "start-to-language-combination",
-      source: "start",
-      target: "language-combination",
-      type: "straight",
-    },
-  ];
-
   // State for nodes, edges, and history
-  const [nodes, setNodes] = useState(initialNodes);
-  const [edges, setEdges] = useState(initialEdges);
-  const [history, setHistory] = useState([
-    { nodes: initialNodes, edges: initialEdges },
-  ]);
+  const [menuList, setMenuList] = useState([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const [history, setHistory] = useState([{ nodes: [], edges: [] }]);
   const [redoStack, setRedoStack] = useState([]);
   const [placeholderNode, setPlaceholderNode] = useState(null);
+  const reactFlowWrapper = useRef(null);
+
+  const addMenuList = () => {
+    setMenuList([...menuList, { id: Date.now(), name: "New Item" }]);
+  };
+
+  const defaultLocalisationNode = {
+    id: "language-combination",
+    data: {
+      label: (
+        <div className="p-2">
+          <h3 className="font-bold">Language Combination</h3>
+          {menuList.map((item) => (
+            <select
+              className="mt-2 p-1 border border-gray-300 rounded"
+              onChange={(e) => handleLanguageChange(e.target.value, item.id)}
+              key={item.id}
+            >
+              <option value="">Select</option>
+              <option value="Portuguese-English">Portuguese-English</option>
+              <option value="Spanish-English">Spanish-English</option>
+            </select>
+          ))}
+
+          <button
+            onClick={addMenuList}
+            className="mt-2 p-1 bg-blue-500 text-white rounded"
+          >
+            Add
+          </button>
+        </div>
+      ),
+    },
+    position: { x: 250, y: 100 },
+  };
+
+  useEffect(() => {
+    setNodes((prevNodes) => [...prevNodes, defaultLocalisationNode]);
+    setEdges((prevEdges) => [
+      ...prevEdges,
+      {
+        id: "start-to-language-combination",
+        source: "start",
+        target: "language-combination",
+        type: "straight",
+      },
+    ]);
+  }, [menuList]);
 
   // Update history when nodes or edges change
   const updateHistory = (newNodes, newEdges) => {
@@ -72,35 +85,54 @@ export default function Home() {
   };
 
   // Handle language selection
-  const handleLanguageChange = (value) => {
+  const handleLanguageChange = (value, selectId) => {
     if (!value) return;
+
+    // Check if a node with the id =localisation already exists
+    const localisationNodes = nodes.filter((node) =>
+      node.id.includes("localisation")
+    );
+    const existingNode =
+      localisationNodes.length > 0
+        ? localisationNodes[localisationNodes.length - 1]
+        : null;
+
+    // If it exists, add a new one below the existing one,
+    // otherwise create a new node
+
+    let position = { x: 450, y: 100 }; // Default position for new node
+    if (existingNode) {
+      position = {
+        x: existingNode.position.x,
+        y: existingNode.position.y + 180, // Position it below the existing node
+      };
+    }
+
     const newNode = {
-      id: "localisation",
+      id: `localisation-${Date.now()}`,
       type: "default",
-      position: { x: 450, y: 100 },
+      position: position,
       data: {
         label: (
           <DefaultNode
             handleRemoveNode={handleRemoveNode}
             nodeType="Localisation"
+            language={value}
           />
         ),
       },
     };
 
     const newEdge = {
-      id: "language-combination-to-localisation",
+      id: `language-combination-to-${newNode.id}`,
       source: "language-combination",
-      target: "localisation",
+      target: newNode.id,
       type: "straight",
     };
 
-    const newNodes = [...nodes, newNode];
-    const newEdges = [...edges, newEdge];
-
-    setNodes(newNodes);
-    setEdges(newEdges);
-    updateHistory(newNodes, newEdges);
+    setNodes((prevNodes) => [...prevNodes, newNode]);
+    setEdges((prevEdges) => [...prevEdges, newEdge]);
+    updateHistory([...nodes, newNode], [...edges, newEdge]);
   };
 
   // Handle node removal
@@ -210,11 +242,11 @@ export default function Home() {
     event.dataTransfer.dropEffect = "move";
   };
 
-  // Handle node changes (e.g., position updates)
+  /* // Handle node changes (e.g., position updates)
   const onNodesChange = useCallback(
     (changes) => setNodes((nds) => applyNodeChanges(changes, nds)),
     []
-  );
+  ); */
 
   // Handle node drop
   const handleNodeDrop = (nodeType, category, position) => {
@@ -277,12 +309,103 @@ export default function Home() {
 
   // Handle drop for jobs
   const handleDropForJob = (nodeType) => {
+    const reactFlowBounds = reactFlowWrapper.current?.getBoundingClientRect();
+    const instance = reactFlowInstanceRef.current;
+    console.log(instance, "instance");
+
+    if (
+      !instance ||
+      !reactFlowBounds ||
+      typeof instance.screenToFlowPosition !== "function"
+    ) {
+      return;
+    }
+
+    const position = instance.screenToFlowPosition({
+      x: event.clientX - reactFlowBounds.left,
+      y: event.clientY - reactFlowBounds.top,
+    });
+
+    console.log(position, "position");
+
+    // if the position is inside the placeholder node
+
     if (placeholderNode) {
-      // Replace the placeholder with the actual node
+      if (
+        position.x < placeholderNode.position.x + 200 &&
+        position.x > placeholderNode.position.x &&
+        position.y < placeholderNode.position.y + 200 &&
+        position.y > placeholderNode.position.y
+      ) {
+        // Replace the placeholder with the actual node
+        const newNode = {
+          id: `${nodeType}-${Date.now()}`,
+          type: "default",
+          position: placeholderNode.position,
+          data: {
+            label: (
+              <DefaultNode
+                handleRemoveNode={handleRemoveNode}
+                nodeType={nodeType}
+              />
+            ),
+          },
+        };
+
+        // Find the last node (before the placeholder)
+        const lastNode = nodes[nodes.length - 2];
+
+        // Create an edge connecting the last node to the new node
+        const newEdge = {
+          id: `${lastNode.id}-to-${newNode.id}`,
+          source: lastNode.id,
+          target: newNode.id,
+          type: "straight",
+        };
+
+        // Update nodes and edges
+        setNodes((prevNodes) =>
+          prevNodes.filter((node) => node.id !== "placeholder").concat(newNode)
+        );
+        setEdges((prevEdges) => [...prevEdges, newEdge]);
+
+        // Clear the placeholder
+        setPlaceholderNode(null);
+
+        // Update history
+        updateHistory(
+          nodes.filter((node) => node.id !== "placeholder").concat(newNode),
+          [...edges, newEdge]
+        );
+      } else {
+        // If the drop position is outside the placeholder, remove the placeholder
+        setNodes((prevNodes) =>
+          prevNodes.filter((node) => node.id !== "placeholder")
+        );
+        setPlaceholderNode(null);
+        // Create a new node at the drop position
+        const newNode = {
+          id: `${nodeType}-${Date.now()}`,
+          type: "default",
+          position,
+          data: {
+            label: (
+              <DefaultNode
+                handleRemoveNode={handleRemoveNode}
+                nodeType={nodeType}
+              />
+            ),
+          },
+        };
+        setNodes((prevNodes) => [...prevNodes, newNode]);
+        updateHistory([...nodes, newNode], edges);
+      }
+    } else {
+      // If no placeholder, create a new node at the drop position
       const newNode = {
         id: `${nodeType}-${Date.now()}`,
         type: "default",
-        position: placeholderNode.position,
+        position,
         data: {
           label: (
             <DefaultNode
@@ -292,34 +415,13 @@ export default function Home() {
           ),
         },
       };
-
-      // Find the last node (before the placeholder)
-      const lastNode = nodes[nodes.length - 2];
-
-      // Create an edge connecting the last node to the new node
-      const newEdge = {
-        id: `${lastNode.id}-to-${newNode.id}`,
-        source: lastNode.id,
-        target: newNode.id,
-        type: "straight",
-      };
-
-      // Update nodes and edges
-      setNodes((prevNodes) =>
-        prevNodes.filter((node) => node.id !== "placeholder").concat(newNode)
-      );
-      setEdges((prevEdges) => [...prevEdges, newEdge]);
-
-      // Clear the placeholder
-      setPlaceholderNode(null);
-
-      // Update history
-      updateHistory(
-        nodes.filter((node) => node.id !== "placeholder").concat(newNode),
-        [...edges, newEdge]
-      );
+      setNodes((prevNodes) => [...prevNodes, newNode]);
+      updateHistory([...nodes, newNode], edges);
     }
   };
+
+  const reactFlowInstanceRef = useRef(null);
+  const [reactFlowInstance, setReactFlowInstance] = useState(null);
 
   //template node
   const premiumLocalisationTemplateNodes = [
@@ -329,25 +431,7 @@ export default function Home() {
       data: { label: "START" },
       position: { x: 50, y: 100 },
     },
-    {
-      id: "language-combination",
-      data: {
-        label: (
-          <div className="p-2">
-            <h3 className="font-bold">Language Combination</h3>
-            <select
-              className="mt-2 p-1 border border-gray-300 rounded"
-              onChange={(e) => handleLanguageChange(e.target.value)}
-            >
-              <option value="">Select</option>
-              <option value="pt-en">Portuguese-English</option>
-              <option value="es-en">Spanish-English</option>
-            </select>
-          </div>
-        ),
-      },
-      position: { x: 250, y: 100 },
-    },
+    defaultLocalisationNode,
     {
       id: "localisation",
       type: "default",
@@ -390,11 +474,40 @@ export default function Home() {
     },
   ];
 
+  // Initial nodes and edges
+  const initialNodes = [
+    {
+      id: "start",
+      type: "input",
+      data: { label: "START" },
+      position: { x: 50, y: 100 },
+    },
+    defaultLocalisationNode,
+  ];
+
+  const initialEdges = [
+    {
+      id: "start-to-language-combination",
+      source: "start",
+      target: "language-combination",
+      type: "straight",
+    },
+  ];
+
+  useEffect(() => {
+    setNodes(initialNodes);
+    setEdges(initialEdges);
+    setHistory([{ nodes: initialNodes, edges: initialEdges }]);
+    setRedoStack([]);
+    setPlaceholderNode(null);
+  }, []);
+
   return (
     <div className="flex flex-col min-h-screen text-gray-800">
       <main className="flex-1 bg-gray-100 relative" id="main-container">
         <div
           style={{ height: "calc(100vh - 75px)", width: "calc(100% - 300px)" }}
+          ref={reactFlowWrapper}
         >
           <ReactFlow
             nodes={nodes}
@@ -403,6 +516,9 @@ export default function Home() {
             className="h-full w-full"
             nodesDraggable={true}
             onNodesChange={onNodesChange}
+            onInit={(instance) => {
+              reactFlowInstanceRef.current = instance;
+            }}
           >
             {nodes.length === 0 && edges.length === 0 && (
               <div className="absolute inset-0 flex items-center justify-center">
